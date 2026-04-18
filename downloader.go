@@ -13,10 +13,10 @@ import (
 	"github.com/gomarkdown/markdown/parser"
 )
 
-func DownloadDocument(documentId, format, outputDir, lang string) error {
+func downloadDocument(documentID, format, outputDir, lang string) error {
 	url := fmt.Sprintf(
 		"https://docs.google.com/document/d/%s/export?format=%s",
-		documentId,
+		documentID,
 		format,
 	)
 
@@ -24,12 +24,12 @@ func DownloadDocument(documentId, format, outputDir, lang string) error {
 
 	resp, err := http.Get(url)
 	if err != nil {
-		return fmt.Errorf("Request failed: %w", err)
+		return fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Unexpected status: %s", resp.Status)
+		return fmt.Errorf("unexpected status: %s", resp.Status)
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {

@@ -14,52 +14,51 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-var (
-	r2BucketName string
-	r2Endpoint   string
-)
+type r2Uploader struct {
+	client     *s3.Client
+	bucketName string
+}
 
-func UploadToR2(ctx context.Context, filePath, r2Key string) error {
-	r2AccountID := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
-	r2AccessKeyID := os.Getenv("CLOUDFLARE_R2_ACCESS_KEY_ID")
-	r2AccessKeySecret := os.Getenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY")
-	r2PublicAPI := os.Getenv("CLOUDFLARE_R2_PUBLIC_API")
+func newR2Uploader() (*r2Uploader, error) {
+	accountID := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
+	accessKeyID := os.Getenv("CLOUDFLARE_R2_ACCESS_KEY_ID")
+	secretKey := os.Getenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY")
+	publicAPI := os.Getenv("CLOUDFLARE_R2_PUBLIC_API")
 
-	if r2PublicAPI == "" {
-		return fmt.Errorf("CLOUDFLARE_R2_PUBLIC_API environment variable not set")
+	if accountID == "" || accessKeyID == "" || secretKey == "" {
+		return nil, fmt.Errorf("missing Cloudflare R2 credentials (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_R2_ACCESS_KEY_ID, CLOUDFLARE_R2_SECRET_ACCESS_KEY)")
+	}
+	if publicAPI == "" {
+		return nil, fmt.Errorf("CLOUDFLARE_R2_PUBLIC_API is not set")
 	}
 
-	u, err := url.Parse(r2PublicAPI)
+	u, err := url.Parse(publicAPI)
 	if err != nil {
-		return fmt.Errorf("failed to parse CLOUDFLARE_R2_PUBLIC_API: %w", err)
+		return nil, fmt.Errorf("failed to parse CLOUDFLARE_R2_PUBLIC_API: %w", err)
 	}
-
-	if r2AccountID == "" || r2AccessKeyID == "" || r2AccessKeySecret == "" {
-		return fmt.Errorf("Cloudflare R2 credentials (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_R2_ACCESS_KEY_ID, CLOUDFLARE_R2_SECRET_ACCESS_KEY) not set")
-	}
-
-	r2Endpoint = fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-	r2BucketName = strings.TrimPrefix(u.Path, "/")
-
-	fmt.Printf("Uploading %s with key %s... ", filePath, r2Key)
-
-	r2Resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-		return aws.Endpoint{
-			URL: fmt.Sprintf("https://%s.r2.cloudflarestorage.com", r2AccountID),
-		}, nil
-	})
 
 	cfg := aws.Config{
-		Credentials:                 credentials.NewStaticCredentialsProvider(r2AccessKeyID, r2AccessKeySecret, ""),
-		Region:                      "auto",
-		EndpointResolverWithOptions: r2Resolver,
+		Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretKey, ""),
+		Region:      "auto",
 	}
 
-	client := s3.NewFromConfig(cfg)
+	endpoint := fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID)
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+	})
+
+	return &r2Uploader{
+		client:     client,
+		bucketName: strings.TrimPrefix(u.Path, "/"),
+	}, nil
+}
+
+func (u *r2Uploader) upload(ctx context.Context, filePath, key string) error {
+	fmt.Printf("Uploading %s with key %s... ", filePath, key)
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("Failed to open file %s: %w", filePath, err)
+		return fmt.Errorf("failed to open file %s: %w", filePath, err)
 	}
 	defer file.Close()
 
@@ -68,14 +67,14 @@ func UploadToR2(ctx context.Context, filePath, r2Key string) error {
 		contentType = "application/octet-stream"
 	}
 
-	_, err = client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      &r2BucketName,
-		Key:         &r2Key,
+	_, err = u.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      &u.bucketName,
+		Key:         &key,
 		Body:        file,
 		ContentType: aws.String(contentType),
 	})
 	if err != nil {
-		return fmt.Errorf("Failed to upload file to R2: %w", err)
+		return fmt.Errorf("failed to upload to R2: %w", err)
 	}
 
 	fmt.Println("OK")

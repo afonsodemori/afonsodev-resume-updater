@@ -4,132 +4,128 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-func LoadDocumentsConfig() (map[string]string, []string) {
+type config struct {
+	documentIDs map[string]string
+	formats     []string
+}
+
+func loadConfig() config {
 	idsJSON := os.Getenv("DOCUMENT_IDS")
 	if idsJSON == "" {
-		panic("DOCUMENT_IDS environment variable is not set")
+		log.Fatal("DOCUMENT_IDS environment variable is not set")
 	}
 
-	var documentIds map[string]string
-	if err := json.Unmarshal([]byte(idsJSON), &documentIds); err != nil {
-		panic(fmt.Sprintf("Failed to parse DOCUMENT_IDS: %v", err))
+	var documentIDs map[string]string
+	if err := json.Unmarshal([]byte(idsJSON), &documentIDs); err != nil {
+		log.Fatalf("failed to parse DOCUMENT_IDS: %v", err)
 	}
-	if len(documentIds) == 0 {
-		panic("DOCUMENT_IDS must contain at least one document ID")
+	if len(documentIDs) == 0 {
+		log.Fatal("DOCUMENT_IDS must contain at least one document ID")
 	}
 
 	formatsJSON := os.Getenv("DOCUMENT_FORMATS")
 	if formatsJSON == "" {
-		panic("DOCUMENT_FORMATS environment variable is not set")
+		log.Fatal("DOCUMENT_FORMATS environment variable is not set")
 	}
 
 	var formats []string
 	if err := json.Unmarshal([]byte(formatsJSON), &formats); err != nil {
-		panic(fmt.Sprintf("Failed to parse DOCUMENT_FORMATS: %v", err))
+		log.Fatalf("failed to parse DOCUMENT_FORMATS: %v", err)
 	}
 	if len(formats) == 0 {
-		panic("DOCUMENT_FORMATS must contain at least one format")
+		log.Fatal("DOCUMENT_FORMATS must contain at least one format")
 	}
 
-	return documentIds, formats
+	return config{documentIDs: documentIDs, formats: formats}
 }
 
 func main() {
+	const outputDir = ".data"
 	now := time.Now()
-	formattedTime := now.Format("2006-01-02 15:04:05")
-	fmt.Println(formattedTime)
+	cfg := loadConfig()
 
-	outputDir := ".data"
-	documentIds, formats := LoadDocumentsConfig()
+	fmt.Printf("Starting at %s\n", now.Format("2006-01-02 15:04:05"))
 
-	for lang, documentId := range documentIds {
-		fmt.Println("\n=>", lang)
-		firstFormatProcessed := false
-		skipCurrentDocumentId := false
+	for lang, documentID := range cfg.documentIDs {
+		fmt.Printf("\n=> %s\n", lang)
 
-		for _, format := range formats {
-			if skipCurrentDocumentId {
-				break
-			}
+		firstFormat := cfg.formats[0]
+		newFile := filepath.Join(outputDir, fmt.Sprintf("%s-new.%s", lang, firstFormat))
+		oldFile := filepath.Join(outputDir, fmt.Sprintf("%s.%s", lang, firstFormat))
 
-			if err := DownloadDocument(documentId, format, outputDir, lang); err != nil {
-				fmt.Println("Error: ", err)
+		if err := downloadDocument(documentID, firstFormat, outputDir, lang); err != nil {
+			fmt.Printf("error: %v\n", err)
+			continue
+		}
+
+		if _, err := os.Stat(oldFile); err == nil {
+			equal, err := filesEqual(newFile, oldFile)
+			if err != nil {
+				fmt.Printf("error comparing files: %v\n", err)
 				continue
 			}
-
-			if !firstFormatProcessed {
-				firstFormatProcessed = true
-
-				newFilename := filepath.Join(outputDir, fmt.Sprintf("%s-new.%s", lang, format))
-				oldFilename := filepath.Join(outputDir, fmt.Sprintf("%s.%s", lang, format))
-
-				_, err := os.Stat(oldFilename)
-				oldFileExists := !os.IsNotExist(err)
-
-				if oldFileExists {
-					areEqual, err := AreFilesEqual(newFilename, oldFilename)
-					if err != nil {
-						fmt.Printf("Error comparing files %s and %s: %v\n", newFilename, oldFilename, err)
-						continue
-					}
-
-					if areEqual {
-						fmt.Printf("%s has no changes.\n", oldFilename)
-						if err := DeleteFile(newFilename); err != nil {
-							fmt.Printf("Error deleting file %s: %v\n", newFilename, err)
-						}
-						skipCurrentDocumentId = true
-					} else {
-						fmt.Printf("%s has a new version!\n", oldFilename)
-					}
-				} else {
-					fmt.Printf("First version of %s just created as %s.\n", oldFilename, newFilename)
-				}
+			if equal {
+				fmt.Printf("%s has no changes.\n", oldFile)
+				_ = os.Remove(newFile)
+				continue
 			}
+			fmt.Printf("%s has a new version!\n", oldFile)
+		} else {
+			fmt.Printf("First version of %s created as %s.\n", oldFile, newFile)
 		}
-		if skipCurrentDocumentId {
-			continue
+
+		for _, format := range cfg.formats[1:] {
+			if err := downloadDocument(documentID, format, outputDir, lang); err != nil {
+				fmt.Printf("error: %v\n", err)
+			}
 		}
 	}
 
 	fmt.Println("\n=> Uploading new versions to Cloudflare R2 (if any)...")
-	for lang := range documentIds {
-		for _, format := range formats {
-			newFilename := filepath.Join(outputDir, fmt.Sprintf("%s-new.%s", lang, format))
-			oldFilename := filepath.Join(outputDir, fmt.Sprintf("%s.%s", lang, format))
+	ctx := context.Background()
 
-			if _, err := os.Stat(newFilename); err == nil {
-				ctx := context.TODO()
+	uploader, err := newR2Uploader()
+	if err != nil {
+		log.Fatalf("failed to initialize R2 uploader: %v", err)
+	}
 
-				// TODO: Temporary hack to avoid 404 for now.
-				r2KeyLegacy := fmt.Sprintf("resume-%s-afonso_de_mori.%s", lang, format)
-				if err := UploadToR2(ctx, newFilename, r2KeyLegacy); err != nil {
-					panic(fmt.Sprintf("Error uploading %s to R2: %v", r2KeyLegacy, err))
-				}
+	for lang := range cfg.documentIDs {
+		for _, format := range cfg.formats {
+			newFile := filepath.Join(outputDir, fmt.Sprintf("%s-new.%s", lang, format))
+			oldFile := filepath.Join(outputDir, fmt.Sprintf("%s.%s", lang, format))
 
-				r2Key := fmt.Sprintf("afonso-de-mori-cv-%s.%s", lang, format)
-				if err := UploadToR2(ctx, newFilename, r2Key); err != nil {
-					panic(fmt.Sprintf("Error uploading %s to R2: %v", r2Key, err))
-				}
+			if _, err := os.Stat(newFile); err != nil {
+				continue
+			}
 
-				if _, err := os.Stat(oldFilename); err == nil {
-					archiveFilename := filepath.Join(outputDir, fmt.Sprintf("%s-%s.%s", lang, now.Format("060102-1504"), format))
-					fmt.Printf("Archiving %s\n", archiveFilename)
-					if err := os.Rename(oldFilename, archiveFilename); err != nil {
-						fmt.Printf("Error archiving file %s: %v\n", oldFilename, err)
-						continue
-					}
-				}
+			// Legacy key kept for backwards compatibility with existing URLs.
+			legacyKey := fmt.Sprintf("resume-%s-afonso_de_mori.%s", lang, format)
+			if err := uploader.upload(ctx, newFile, legacyKey); err != nil {
+				log.Fatalf("error uploading %s: %v", legacyKey, err)
+			}
 
-				if err := os.Rename(newFilename, oldFilename); err != nil {
-					fmt.Printf("Error renaming file %s: %v\n", newFilename, err)
+			key := fmt.Sprintf("afonso-de-mori-cv-%s.%s", lang, format)
+			if err := uploader.upload(ctx, newFile, key); err != nil {
+				log.Fatalf("error uploading %s: %v", key, err)
+			}
+
+			if _, err := os.Stat(oldFile); err == nil {
+				archiveFile := filepath.Join(outputDir, fmt.Sprintf("%s-%s.%s", lang, now.Format("060102-1504"), format))
+				fmt.Printf("Archiving %s\n", archiveFile)
+				if err := os.Rename(oldFile, archiveFile); err != nil {
+					fmt.Printf("error archiving %s: %v\n", oldFile, err)
 					continue
 				}
+			}
+
+			if err := os.Rename(newFile, oldFile); err != nil {
+				fmt.Printf("error renaming %s to %s: %v\n", newFile, oldFile, err)
 			}
 		}
 	}
