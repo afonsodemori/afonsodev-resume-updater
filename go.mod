@@ -1,4 +1,4 @@
-module github.com/afonsodemori/afonsodev-resume-updater
+module github.com/afonsodemori/afonsodev-resume-sync
 
 go 1.25.6
 

@@ -16,4 +16,4 @@ release-test:
 
 run-builded:
 	@echo "Running the built binary..."
-	@dist/afonsodev-resume-updater_linux_arm64_v8.0/afonsodev-resume-updater
+	@dist/afonsodev-resume-sync_linux_arm64_v8.0/afonsodev-resume-sync

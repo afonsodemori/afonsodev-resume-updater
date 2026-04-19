@@ -8,9 +8,9 @@ builds:
   - env:
       - CGO_ENABLED=0
     ldflags:
-      - -X github.com/afonsodemori/afonsodev-resume-updater/cmd.version={{.Version}}
-      - -X github.com/afonsodemori/afonsodev-resume-updater/cmd.commit={{.ShortCommit}}
-      - -X github.com/afonsodemori/afonsodev-resume-updater/cmd.date={{.CommitDate}}
+      - -X github.com/afonsodemori/afonsodev-resume-sync/cmd.version={{.Version}}
+      - -X github.com/afonsodemori/afonsodev-resume-sync/cmd.commit={{.ShortCommit}}
+      - -X github.com/afonsodemori/afonsodev-resume-sync/cmd.date={{.CommitDate}}
     goos:
       - linux
     goarch:
@@ -20,7 +20,7 @@ builds:
 nfpms:
   - maintainer: 'Afonso de Mori <me@afonso.dev>'
     description: 'Exports resume documents from Google Docs and uploads new versions to Cloudflare R2.'
-    homepage: 'https://github.com/afonsodemori/afonsodev-resume-updater'
+    homepage: 'https://github.com/afonsodemori/afonsodev-resume-sync'
     license: MIT
     formats:
       - apk

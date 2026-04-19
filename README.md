@@ -1,4 +1,4 @@
-# afonsodev-resume-updater
+# afonsodev-resume-sync
 
 A Go CLI tool that automatically exports my resume from Google Docs, detects when it changes, and publishes the new version to cloud storage — so any link pointing to my resume is always up to date without manual intervention.
 
